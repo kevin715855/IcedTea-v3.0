@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { createCheckin } from '@/server/services/checkins'
+import { createCheckin, listCheckins } from '@/server/services/checkins'
 import { AppError } from '@/lib/app-error'
 import { writeAuditLog, getClientIp, getRequestId } from '@/lib/audit'
 
@@ -10,6 +10,15 @@ const checkinSchema = z.object({
   session_id: z.string().uuid('session_id không hợp lệ'),
   student_code: z.string().min(1, 'Mã sinh viên không được để trống'),
 })
+
+function getListFilter(req: Request) {
+  const url = new URL(req.url)
+  const session_id = url.searchParams.get('session_id') || undefined
+  const student_code = url.searchParams.get('student_code') || undefined
+  const page = Math.max(1, Number(url.searchParams.get('page') || '1'))
+  const page_size = Math.min(100, Math.max(1, Number(url.searchParams.get('page_size') || '20')))
+  return { session_id, student_code, page, page_size }
+}
 
 function getOriginCheck(req: Request): Response | null {
   const expectedOrigin = process.env.NEXT_PUBLIC_APP_URL
@@ -38,6 +47,19 @@ function auditMeta(req: Request, sessionId: string, studentCode: string) {
     ip: getClientIp(req),
     requestId: getRequestId(req),
     metadata: { session_id: sessionId, student_code: studentCode },
+  }
+}
+
+export async function GET(req: Request) {
+  const account = getAccount(req)
+  try {
+    const result = await listCheckins(account, getListFilter(req))
+    return NextResponse.json(result)
+  } catch (e: any) {
+    if (e instanceof AppError) {
+      return NextResponse.json({ error: e.message }, { status: e.status })
+    }
+    return NextResponse.json({ error: 'lỗi server' }, { status: 500 })
   }
 }
 
@@ -78,7 +100,11 @@ export async function POST(req: Request) {
         targetId: null,
         ...auditMeta(req, session_id, student_code),
       })
-      return NextResponse.json({ error: e.message }, { status: e.status })
+      const body: { error: string; detail?: Record<string, unknown> } = { error: e.message }
+      if (e.extras) {
+        body.detail = e.extras
+      }
+      return NextResponse.json(body, { status: e.status })
     }
     return NextResponse.json({ error: 'lỗi server' }, { status: 500 })
   }

@@ -51,9 +51,92 @@ export async function createCheckin(
     })
   } catch (e: any) {
     if (e.code === 'P2002') {
-      throw new AppError(409, 'đã điểm danh')
+      const existing = await prisma.checkins.findFirst({
+        where: { session_id: sessionId, student_code: mssv.mssv!, cancelled_at: null },
+        select: { checked_in_at: true },
+      })
+      throw new AppError(409, 'đã điểm danh', existing ? { checked_in_at: existing.checked_in_at } : undefined)
     }
     throw e
+  }
+}
+
+export interface CheckinListItem {
+  id: string
+  session_id: string
+  session_name: string | null
+  student_code: string
+  scanned_by: string
+  scanned_by_username: string | null
+  checked_in_at: Date
+  cancelled_at: Date | null
+  cancel_reason: string | null
+}
+
+export interface CheckinListResult {
+  checkins: CheckinListItem[]
+  total: number
+  page: number
+  page_size: number
+  total_pages: number
+}
+
+export async function listCheckins(
+  account: Account | null,
+  filter: { session_id?: string; student_code?: string; page?: number; page_size?: number },
+): Promise<CheckinListResult> {
+  const access = requireUser(account)
+  if (!access.ok) {
+    throw new AppError(access.status, access.reason)
+  }
+
+  const { session_id, student_code, page = 1, page_size = 20 } = filter
+  const take = Math.min(100, Math.max(1, page_size))
+  const skip = (Math.max(1, page) - 1) * take
+
+  const where: Record<string, unknown> = {}
+  if (access.account.role !== 'admin') {
+    where.scanned_by = access.account.id
+  }
+  if (session_id) {
+    where.session_id = session_id
+  }
+  if (student_code) {
+    where.student_code = { contains: student_code }
+  }
+
+  const [rows, total] = await prisma.$transaction([
+    prisma.checkins.findMany({ where, orderBy: { checked_in_at: 'desc' }, skip, take }),
+    prisma.checkins.count({ where }),
+  ])
+
+  const sessionIds = [...new Set(rows.map((r) => r.session_id))]
+  const scannerIds = [...new Set(rows.map((r) => r.scanned_by))]
+
+  const sessions = await prisma.sessions.findMany({ where: { id: { in: sessionIds } }, select: { id: true, name: true } })
+  const scanners = await prisma.users.findMany({ where: { id: { in: scannerIds } }, select: { id: true, username: true } })
+
+  const sessionName = new Map(sessions.map((s) => [s.id, s.name]))
+  const scannerName = new Map(scanners.map((u) => [u.id, u.username]))
+
+  const checkins: CheckinListItem[] = rows.map((r) => ({
+    id: r.id,
+    session_id: r.session_id,
+    session_name: sessionName.get(r.session_id) ?? null,
+    student_code: r.student_code,
+    scanned_by: r.scanned_by,
+    scanned_by_username: scannerName.get(r.scanned_by) ?? null,
+    checked_in_at: r.checked_in_at,
+    cancelled_at: r.cancelled_at,
+    cancel_reason: r.cancel_reason,
+  }))
+
+  return {
+    checkins,
+    total,
+    page: Math.max(1, page),
+    page_size: take,
+    total_pages: Math.ceil(total / take),
   }
 }
 

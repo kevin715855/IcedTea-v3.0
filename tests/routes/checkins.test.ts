@@ -3,6 +3,7 @@ import { prisma } from '@/lib/prisma'
 import { hashPassword } from '@/lib/password'
 import { POST as checkinPost } from '@/app/api/v1/checkins/route'
 import { DELETE as checkinDelete } from '@/app/api/v1/checkins/[id]/route'
+import { GET as checkinGet } from '@/app/api/v1/checkins/route'
 
 const suffix = `${Date.now()}-${Math.random().toString(36).slice(2)}`
 const created: { users: string[]; sessions: string[]; checkins: string[] } = {
@@ -265,5 +266,109 @@ describe('DELETE /api/v1/checkins/:id', () => {
       { params: Promise.resolve({ id: json.checkin.id }) },
     )
     expect(res.status).toBe(422)
+  })
+})
+
+describe('GET /api/v1/checkins', () => {
+  async function checkinList(url: string, id: string | null, role: 'admin' | 'staff' | null) {
+    return checkinGet(req('GET', url, id, role, null))
+  }
+
+  it('staff sees only their own check-ins', async () => {
+    const staff = await createUser(`staff_list_${suffix}`, 'staff')
+    const admin = await createUser(`adm_list_${suffix}`, 'admin')
+    const session = await createSessionRow(
+      `buoi_list_${suffix}`,
+      new Date(Date.now() - 60 * 60 * 1000),
+      new Date(Date.now() + 60 * 60 * 1000),
+      admin.id,
+    )
+
+    const mine1 = await checkinPost(req('POST', '/api/v1/checkins', staff.id, 'staff', { session_id: session.id, student_code: '20230001' }))
+    const mine2 = await checkinPost(req('POST', '/api/v1/checkins', staff.id, 'staff', { session_id: session.id, student_code: '20230002' }))
+    const json1 = await mine1.json()
+    const json2 = await mine2.json()
+    created.checkins.push(json1.checkin.id, json2.checkin.id)
+
+    const other = await createUser(`staff_other_${suffix}`, 'staff')
+    const otherRes = await checkinPost(req('POST', '/api/v1/checkins', other.id, 'staff', { session_id: session.id, student_code: '20230003' }))
+    const otherJson = await otherRes.json()
+    created.checkins.push(otherJson.checkin.id)
+
+    const res = await checkinList('/api/v1/checkins', staff.id, 'staff')
+    expect(res.status).toBe(200)
+    const json = await res.json()
+    expect(json.checkins.map((c: any) => c.id).sort()).toEqual([json1.checkin.id, json2.checkin.id].sort())
+    expect(json.total).toBe(2)
+  })
+
+  it('admin sees all check-ins', async () => {
+    const staff = await createUser(`staff_admin_list_${suffix}`, 'staff')
+    const admin = await createUser(`adm_admin_list_${suffix}`, 'admin')
+    const session = await createSessionRow(
+      `buoi_admin_list_${suffix}`,
+      new Date(Date.now() - 60 * 60 * 1000),
+      new Date(Date.now() + 60 * 60 * 1000),
+      admin.id,
+    )
+
+    const mine = await checkinPost(req('POST', '/api/v1/checkins', staff.id, 'staff', { session_id: session.id, student_code: '20230001' }))
+    const json = await mine.json()
+    created.checkins.push(json.checkin.id)
+
+    const res = await checkinList('/api/v1/checkins', admin.id, 'admin')
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.checkins.some((c: any) => c.id === json.checkin.id)).toBe(true)
+  })
+
+  it('filtering by session works', async () => {
+    const staff = await createUser(`staff_fs_${suffix}`, 'staff')
+    const admin = await createUser(`adm_fs_${suffix}`, 'admin')
+    const session = await createSessionRow(
+      `buoi_fs_${suffix}`,
+      new Date(Date.now() - 60 * 60 * 1000),
+      new Date(Date.now() + 60 * 60 * 1000),
+      admin.id,
+    )
+    const other = await createSessionRow(
+      `buoi_fs2_${suffix}`,
+      new Date(Date.now() - 60 * 60 * 1000),
+      new Date(Date.now() + 60 * 60 * 1000),
+      admin.id,
+    )
+
+    const res = await checkinPost(req('POST', '/api/v1/checkins', staff.id, 'staff', { session_id: session.id, student_code: '20230001' }))
+    const json = await res.json()
+    created.checkins.push(json.checkin.id)
+
+    const list = await checkinList(`/api/v1/checkins?session_id=${other.id}`, staff.id, 'staff')
+    const body = await list.json()
+    expect(body.total).toBe(0)
+
+    const list2 = await checkinList(`/api/v1/checkins?session_id=${session.id}`, staff.id, 'staff')
+    const body2 = await list2.json()
+    expect(body2.total).toBe(1)
+  })
+
+  it('duplicate check-in 409 includes checked_in_at detail', async () => {
+    const staff = await createUser(`staff_dup2_${suffix}`, 'staff')
+    const admin = await createUser(`adm_dup2_${suffix}`, 'admin')
+    const session = await createSessionRow(
+      `buoi_dup2_${suffix}`,
+      new Date(Date.now() - 60 * 60 * 1000),
+      new Date(Date.now() + 60 * 60 * 1000),
+      admin.id,
+    )
+
+    const first = await checkinPost(req('POST', '/api/v1/checkins', staff.id, 'staff', { session_id: session.id, student_code: '20230001' }))
+    const json = await first.json()
+    created.checkins.push(json.checkin.id)
+
+    const second = await checkinPost(req('POST', '/api/v1/checkins', staff.id, 'staff', { session_id: session.id, student_code: '20230001' }))
+    expect(second.status).toBe(409)
+    const body = await second.json()
+    expect(body.error).toBe('đã điểm danh')
+    expect(body.detail.checked_in_at).toBe(json.checkin.checked_in_at)
   })
 })
