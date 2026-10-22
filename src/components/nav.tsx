@@ -56,6 +56,12 @@ export function Nav() {
               >
                 Tài khoản Staff
               </Link>
+              <Link
+                href="/admin/reports"
+                className={`px-3 py-2 rounded-md text-sm font-medium ${activeClass(pathname, '/admin/reports')}`}
+              >
+                Báo cáo
+              </Link>
             </>
           )}
           <span className="ml-auto text-xs text-gray-500">{account?.username} ({account?.role})</span>
