@@ -204,6 +204,32 @@ icetea/
 - Gói miễn phí (Hobby) của Vercel dành cho dùng cá nhân phi thương mại và có giới hạn riêng. Hãy kiểm tra lại điều khoản và giới hạn hiện hành trước khi chạy cho buổi thật.
 - Khi chuyển sang server trường: đóng gói Docker, Postgres cục bộ, Nginx + HTTPS, đồng bộ giờ NTP, sao lưu hằng ngày, PostgreSQL chỉ nghe trên mạng nội bộ.
 
+## Triển khai lên Vercel
+
+Kết nối repo `kevin715855/IcedTea-v3.0` với Vercel (Import project), chọn framework Next.js. Build chạy `prisma generate && next build` (script `build` và `postinstall` đã có sẵn trong `package.json`), nên Prisma Client được sinh tự động khi cài đặt dependencies — không cần thao tác thủ công.
+
+### Biến môi trường (Vercel → Settings → Environment Variables)
+
+Thiết lập cho cả Preview và Production:
+
+| Biến | Ý nghĩa | Lưu ý |
+| --- | --- | --- |
+| `DATABASE_URL` | Chuỗi kết nối pooled (serverless-friendly) của Neon | Dùng cho ứng dụng |
+| `DIRECT_URL` | Chuỗi kết nối trực tiếp (non-pooled) của Neon | Dùng cho `prisma migrate deploy` |
+| `JWT_SECRET` | Khóa ký JWT access token | Sinh bằng `openssl rand -base64 32`, không commit |
+| `JWT_EXPIRES_IN` | Thời gian sống access token (giây) | Không được lớn hơn `valid_until` của tài khoản |
+| `NEXT_PUBLIC_APP_URL` | URL gốc của ứng dụng | Phải **khớp chính xác** domain production (có `https://`, không có `/` cuối), ví dụ `https://icedtea.vercel.app`. Sau khi đổi, phải **redeploy** để có hiệu lực. |
+
+### Migration
+
+Áp dụng schema lên database production bằng `prisma migrate deploy` (qua Neon console hoặc chạy một lần trong quá trình deploy). `DATABASE_URL` (pooled) dùng cho ứng dụng; `DIRECT_URL` (non-pooled) dùng cho migration.
+
+### Lưu ý
+
+- `NEXT_PUBLIC_APP_URL` phải khớp **chính xác** domain Vercel (có `https://`, không dấu `/` cuối). Sau mỗi lần thay đổi biến này, hãy redeploy project.
+- Không commit `.env` hoặc bí mật (`JWT_SECRET`, `DATABASE_URL`); chúng chỉ được đặt trong Environment Variables của Vercel.
+- Tắt Deployment Protection cho Production để staff có thể truy cập.
+
 Cần bạn trả lời trước khi chốt schema (đã trả lời)
 
 - [ ] Đồng ý đổi stack từ NestJS sang Next.js để chạy trên Vercel
