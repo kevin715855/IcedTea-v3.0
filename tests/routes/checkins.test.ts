@@ -351,6 +351,79 @@ describe('GET /api/v1/checkins', () => {
     expect(body2.total).toBe(1)
   })
 
+  it('filtering by student_code works', async () => {
+    const staff = await createUser(`staff_sc_${suffix}`, 'staff')
+    const admin = await createUser(`adm_sc_${suffix}`, 'admin')
+    const session = await createSessionRow(
+      `buoi_sc_${suffix}`,
+      new Date(Date.now() - 60 * 60 * 1000),
+      new Date(Date.now() + 60 * 60 * 1000),
+      admin.id,
+    )
+
+    await checkinPost(req('POST', '/api/v1/checkins', staff.id, 'staff', { session_id: session.id, student_code: '20230001' }))
+    await checkinPost(req('POST', '/api/v1/checkins', staff.id, 'staff', { session_id: session.id, student_code: '20230002' }))
+    const other = await createUser(`staff_sc_other_${suffix}`, 'staff')
+    const otherRes = await checkinPost(req('POST', '/api/v1/checkins', other.id, 'staff', { session_id: session.id, student_code: '20230003' }))
+    const otherJson = await otherRes.json()
+    created.checkins.push(otherJson.checkin.id)
+
+    const res = await checkinList(`/api/v1/checkins?student_code=20230001`, staff.id, 'staff')
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.total).toBe(1)
+    expect(body.checkins.every((c: any) => c.student_code === '20230001')).toBe(true)
+
+    // staff filtering another staff's code sees nothing (permission scoping applies)
+    const res2 = await checkinList(`/api/v1/checkins?student_code=20230003`, staff.id, 'staff')
+    const body2 = await res2.json()
+    expect(body2.total).toBe(0)
+  })
+
+  it('pagination page and page_size works', async () => {
+    const staff = await createUser(`staff_pg_${suffix}`, 'staff')
+    const admin = await createUser(`adm_pg_${suffix}`, 'admin')
+    const session = await createSessionRow(
+      `buoi_pg_${suffix}`,
+      new Date(Date.now() - 60 * 60 * 1000),
+      new Date(Date.now() + 60 * 60 * 1000),
+      admin.id,
+    )
+
+    for (const code of ['20230001', '20230002', '20230003', '20230004', '20230005']) {
+      const res = await checkinPost(req('POST', '/api/v1/checkins', staff.id, 'staff', { session_id: session.id, student_code: code }))
+      const json = await res.json()
+      created.checkins.push(json.checkin.id)
+    }
+
+    const page1 = await checkinList(`/api/v1/checkins?page=1&page_size=2`, staff.id, 'staff')
+    const b1 = await page1.json()
+    expect(b1.checkins.length).toBe(2)
+    expect(b1.total).toBe(5)
+    expect(b1.page).toBe(1)
+    expect(b1.page_size).toBe(2)
+    expect(b1.total_pages).toBe(3)
+
+    const page2 = await checkinList(`/api/v1/checkins?page=2&page_size=2`, staff.id, 'staff')
+    const b2 = await page2.json()
+    expect(b2.checkins.length).toBe(2)
+    expect(b2.total_pages).toBe(3)
+
+    const page3 = await checkinList(`/api/v1/checkins?page=3&page_size=2`, staff.id, 'staff')
+    const b3 = await page3.json()
+    expect(b3.checkins.length).toBe(1)
+    expect(b3.total_pages).toBe(3)
+  })
+
+  it('partial unique index exists at database level', async () => {
+    const rows = await prisma.$queryRawUnsafe<any[]>(
+      `SELECT indexname, indexdef FROM pg_indexes WHERE tablename='checkins' AND indexdef LIKE '%cancelled_at IS NULL%'`
+    )
+    expect(rows.length).toBeGreaterThan(0)
+    expect(String(rows[0].indexdef)).toContain('UNIQUE')
+    expect(String(rows[0].indexdef)).toContain('WHERE (cancelled_at IS NULL)')
+  })
+
   it('duplicate check-in 409 includes checked_in_at detail', async () => {
     const staff = await createUser(`staff_dup2_${suffix}`, 'staff')
     const admin = await createUser(`adm_dup2_${suffix}`, 'admin')
